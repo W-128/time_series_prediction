@@ -6,18 +6,14 @@
 # 获取test
 
 # 测试的test集肯定是一致的
+
 import sys
 import os
-import datetime
-import re
 from datetime import timedelta
-from matplotlib.pyplot import MultipleLocator
-from statistics import mean
 import pandas as pd
 import math
 import seaborn as sns
 import matplotlib.pyplot as plt
-from torch import xlogy
 import numpy as np
 from sklearn.metrics import mean_squared_error
 
@@ -26,10 +22,13 @@ rootPath = os.path.split(curPath)[0]
 sys.path.append(os.path.split(rootPath)[0])
 sys.path.append(rootPath)
 
+from data.handle_data_set import RESAMPLE_FREQ_MIN, TEST_LEN, TRAIN_LEN, DATA_SET_NAME
+from data.handle_data_set import get_test_series, get_resample_train_test_file_dir
+
+pdq_prediction_csv = 'p_2_d_0_q_5_prediction.csv'
 
 # 模拟RESMAPLE_INTERVAL和POD_INITIAL_SECONDS是一致的
-RESMAPLE_INTERVAL_MINITE = 40
-POD_INITIAL_MINITE = RESMAPLE_INTERVAL_MINITE
+POD_INITIAL_MINITE = RESAMPLE_FREQ_MIN
 
 POD_REQ_THRESHOLD = 30.0
 POD_CPU_UP_THRESHOLD = 0.8
@@ -237,19 +236,29 @@ def caculate_metric(pod_num_dic, response_time_dic):
     print('sla违约率:{:.1f}%'.format(100.0 * sla_vio_rate))
 
 
-test_data_file = rootPath+'/data_use_stable_pdq/fre_40min/test_df.csv'
-test_data_df = pd.read_csv(test_data_file, index_col=0, parse_dates=True)
-test_data_series = pd.Series(
-    test_data_df['count'].values, index=test_data_df.index)
-test_data_series = test_data_series[1:]
+# 读取arima的预测数据集
+def get_airima_predict_series(data_set_name, test_len, train_len, resample_interval_minite, pdq_prediction_csv):
+    resample_train_test_file = data_set_name+'/resample_freq_'+str(resample_interval_minite) + \
+        'min_test_len_'+str(test_len)+'_train_len_'+str(train_len)
+    arima_prediction_series_file = rootPath + \
+        '/prediction/prediction_result/'+resample_train_test_file + \
+        '/arima/'+pdq_prediction_csv
+    arima_prediction_df = pd.read_csv(
+        arima_prediction_series_file, index_col=0, parse_dates=True)
+    arima_prediction_series = pd.Series(
+        arima_prediction_df['0'].values, index=arima_prediction_df.index)
+
+    return arima_prediction_series
 
 
-arima_prediction_series_file = rootPath + \
-    '/prediction/prediction_result/resample_freq_40min_test_len_80_train_len_1768/arima/p_2_d_0_q_0_prediction.csv'
-arima_prediction_df = pd.read_csv(
-    arima_prediction_series_file, index_col=0, parse_dates=True)
-arima_prediction_series = pd.Series(
-    arima_prediction_df['0'].values, index=arima_prediction_df.index)
+# 读取测试数据集
+resample_train_test_file_dir = get_resample_train_test_file_dir(
+    DATA_SET_NAME, TEST_LEN, TRAIN_LEN, RESAMPLE_FREQ_MIN)
+test_data_series = get_test_series(resample_train_test_file_dir)
+
+# 读取arima的预测数据集
+arima_prediction_series = get_airima_predict_series(
+    DATA_SET_NAME, TEST_LEN, TRAIN_LEN, RESAMPLE_FREQ_MIN, pdq_prediction_csv)
 
 error = mean_squared_error(
     arima_prediction_series.values, test_data_series.values)
@@ -258,19 +267,19 @@ print(error)
 static_threshold_pod_num_dic, static_threshold_response_time_dic = static_threshold_method(test_data_series=test_data_series, pod_req_threshold=POD_REQ_THRESHOLD,
                                                                                            pod_cpu_up_threshold=POD_CPU_UP_THRESHOLD, pod_cpu_down_threshold=POD_CPU_DOWN_THRESHOLD,
                                                                                            normal_reqsponse_time=NORMAL_RESPONSE_TIME, more_than_threshold_response_time=MORE_THAN_THRESHOLD_RESPONSE_TIME,
-                                                                                           resample_interval_minute=RESMAPLE_INTERVAL_MINITE, pod_intial_minute=POD_INITIAL_MINITE,
+                                                                                           resample_interval_minute=RESAMPLE_FREQ_MIN, pod_intial_minute=POD_INITIAL_MINITE,
                                                                                            pod_first_num=POD_FIRST_NUM)
 # test_data_series==prediction_series 预测完全正确
 correct_predict_pod_num_dic, correct_predict_response_time_dic = predict(test_data_series=test_data_series, prediction_series=test_data_series, pod_req_threshold=POD_REQ_THRESHOLD,
                                                                          pod_cpu_up_threshold=POD_CPU_UP_THRESHOLD, pod_cpu_down_threshold=POD_CPU_DOWN_THRESHOLD,
                                                                          normal_reqsponse_time=NORMAL_RESPONSE_TIME, more_than_threshold_response_time=MORE_THAN_THRESHOLD_RESPONSE_TIME,
-                                                                         resample_interval_minute=RESMAPLE_INTERVAL_MINITE, pod_intial_minute=POD_INITIAL_MINITE,
+                                                                         resample_interval_minute=RESAMPLE_FREQ_MIN, pod_intial_minute=POD_INITIAL_MINITE,
                                                                          pod_first_num=POD_FIRST_NUM)
 
 arima_predict_pod_num_dic, arima_predict_response_time_dic = predict_with_slow_reduce(test_data_series=test_data_series, prediction_series=arima_prediction_series, pod_req_threshold=POD_REQ_THRESHOLD,
                                                                                       pod_cpu_up_threshold=POD_CPU_UP_THRESHOLD, pod_cpu_down_threshold=POD_CPU_DOWN_THRESHOLD,
                                                                                       normal_reqsponse_time=NORMAL_RESPONSE_TIME, more_than_threshold_response_time=MORE_THAN_THRESHOLD_RESPONSE_TIME,
-                                                                                      resample_interval_minute=RESMAPLE_INTERVAL_MINITE, pod_intial_minute=POD_INITIAL_MINITE,
+                                                                                      resample_interval_minute=RESAMPLE_FREQ_MIN, pod_intial_minute=POD_INITIAL_MINITE,
                                                                                       pod_first_num=POD_FIRST_NUM)
 
 print('静态阈值')
