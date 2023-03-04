@@ -7,6 +7,7 @@
 
 # 测试的test集肯定是一致的
 
+
 import sys
 import os
 from datetime import timedelta
@@ -22,22 +23,24 @@ rootPath = os.path.split(curPath)[0]
 sys.path.append(os.path.split(rootPath)[0])
 sys.path.append(rootPath)
 
-from data.handle_data_set import RESAMPLE_FREQ_MIN, TEST_LEN, TRAIN_LEN, DATA_SET_NAME
-from data.handle_data_set import get_test_series, get_resample_train_test_file_dir
+from data.handle_data_set2 import RESAMPLE_FREQ_MIN, TEST_LEN, TRAIN_LEN, DATA_SET_NAME
+from data.handle_data_set2 import get_test_series, get_resample_train_test_file_dir
+pdq_prediction_csv = 'p_1_d_1_q_1_prediction.csv'
 
-pdq_prediction_csv = 'p_2_d_0_q_5_prediction.csv'
+lstm_prediction_csv = 'ep1102-loss2.877-val_loss3.416_prediction.csv'
 
 # 模拟RESMAPLE_INTERVAL和POD_INITIAL_SECONDS是一致的
 POD_INITIAL_MINITE = RESAMPLE_FREQ_MIN
 
-POD_REQ_THRESHOLD = 30.0
+POD_REQ_THRESHOLD = 10.0
 POD_CPU_UP_THRESHOLD = 0.8
 POD_CPU_DOWN_THRESHOLD = 0.5
 NORMAL_RESPONSE_TIME = 30
 MORE_THAN_THRESHOLD_RESPONSE_TIME = 20000
-POD_FIRST_NUM = 5
+POD_FIRST_NUM = 3
 PREDICT_Y_LEN = 2
 SLA = 1000
+COLD_MINITE = RESAMPLE_FREQ_MIN*10
 
 
 def static_threshold_method(test_data_series, pod_req_threshold,
@@ -47,7 +50,7 @@ def static_threshold_method(test_data_series, pod_req_threshold,
     pod_num_dic = {}
     pod_num_dic[test_data_series.index[0]] = pod_first_num
     response_time_dic = {}
-
+    last_reduce_time = None
     for i, v in test_data_series.items():
         # 下一个时间点==可缩的时间点
         next_time_step = i+timedelta(minutes=resample_interval_minute)
@@ -76,9 +79,16 @@ def static_threshold_method(test_data_series, pod_req_threshold,
             # 扩
             if pod_utilization > pod_cpu_up_threshold:
                 pod_num_dic[next_can_add_pod_time_step] = math.ceil(need_pod)
+                last_reduce_time = next_can_add_pod_time_step
             # 缩
             else:
-                pod_num_dic[next_time_step] = math.ceil(need_pod)
+                # 冷静期已过
+                if last_reduce_time == None or next_time_step >= last_reduce_time+timedelta(minutes=COLD_MINITE):
+                    pod_num_dic[next_time_step] = math.ceil(need_pod)
+                    pod_num_dic[next_can_add_pod_time_step] = math.ceil(
+                        need_pod)
+                    last_reduce_time = next_time_step
+
         # else:
         #     pod_num_dic[i+timedelta(seconds=2*resample_interval)
         #                 ] = pod_num_dic[i+timedelta(seconds=resample_interval)]
@@ -98,6 +108,7 @@ def predict(test_data_series, prediction_series, pod_req_threshold,
     # for i in range(PREDICT_X_LEN):
     #     pod_num_dic[req_series.index[i]] = pod_first_num
 
+    last_reduce_time = None
     for i, v in test_data_series.items():
         # 计算响应时间
         now_pod_num = pod_num_dic[i]
@@ -120,11 +131,17 @@ def predict(test_data_series, prediction_series, pod_req_threshold,
                                                                pod_cpu_up_threshold=pod_cpu_up_threshold,
                                                                pod_req_threshold=pod_req_threshold))
             if need_pod < now_pod_num:
-                pod_num_dic[i+timedelta(minutes=(k+1)
-                                        * resample_interval_minute)] = need_pod
+                # 冷静期已过
+                if last_reduce_time == None or i+timedelta(minutes=(k+1)*resample_interval_minute) >= last_reduce_time+timedelta(minutes=COLD_MINITE):
+                    pod_num_dic[i+timedelta(minutes=(k+1)
+                                            * resample_interval_minute)] = need_pod
+                    last_reduce_time = i + \
+                        timedelta(minutes=(k+1)*resample_interval_minute)
             if need_pod > now_pod_num and i+timedelta(minutes=(k+1)*resample_interval_minute) > i+timedelta(minutes=pod_intial_minute):
                 pod_num_dic[i+timedelta(minutes=(k+1)
                                         * resample_interval_minute)] = need_pod
+                last_reduce_time = i + \
+                    timedelta(minutes=(k+1) * resample_interval_minute)
 
         # 未进行扩缩
         if i+timedelta(minutes=resample_interval_minute) not in pod_num_dic:
@@ -140,13 +157,13 @@ def predict_with_slow_reduce(test_data_series, prediction_series, pod_req_thresh
                              resample_interval_minute, pod_intial_minute, pod_first_num
                              ):
     # 计算need_pod的cpu利用率上限
-    pod_cpu_up_threshold_to_need_pod = pod_cpu_up_threshold-0.05
+    pod_cpu_up_threshold_to_need_pod = pod_cpu_up_threshold-0.04
     pod_num_dic = {}
     response_time_dic = {}
     pod_num_dic[test_data_series.index[0]] = pod_first_num
     # for i in range(PREDICT_X_LEN):
     #     pod_num_dic[req_series.index[i]] = pod_first_num
-
+    last_reduce_time = None
     for i, v in test_data_series.items():
         # 计算响应时间
         now_pod_num = pod_num_dic[i]
@@ -181,11 +198,17 @@ def predict_with_slow_reduce(test_data_series, prediction_series, pod_req_thresh
         for k in range(len(need_pod_list)):
             need_pod = need_pod_list[k]
             if need_pod < now_pod_num and all_reduce_pod_flag:
-                pod_num_dic[i+timedelta(minutes=(k+1)
-                                        * resample_interval_minute)] = need_pod
+                # 冷静期已过
+                if last_reduce_time == None or i+timedelta(minutes=(k+1) * resample_interval_minute) >= last_reduce_time+timedelta(minutes=COLD_MINITE):
+                    pod_num_dic[i+timedelta(minutes=(k+1)
+                                            * resample_interval_minute)] = need_pod
+                    last_reduce_time = i + \
+                        timedelta(minutes=(k+1) * resample_interval_minute)
             if need_pod > now_pod_num and i+timedelta(minutes=(k+1)*resample_interval_minute) > i+timedelta(minutes=pod_intial_minute):
                 pod_num_dic[i+timedelta(minutes=(k+1)
                                         * resample_interval_minute)] = need_pod
+                last_reduce_time = i + \
+                    timedelta(minutes=(k+1) * resample_interval_minute)
 
         # 未进行扩缩
         if i+timedelta(minutes=resample_interval_minute) not in pod_num_dic:
@@ -250,6 +273,22 @@ def get_airima_predict_series(data_set_name, test_len, train_len, resample_inter
 
     return arima_prediction_series
 
+# 读取arima的预测数据集
+
+
+def get_lstm_predict_series(data_set_name, test_len, train_len, resample_interval_minite, lstm_prediction_csv):
+    resample_train_test_file = data_set_name+'/resample_freq_'+str(resample_interval_minite) + \
+        'min_test_len_'+str(test_len)+'_train_len_'+str(train_len)
+    lstm_prediction_series_file = rootPath + \
+        '/prediction/prediction_result/'+resample_train_test_file + \
+        '/lstm/'+lstm_prediction_csv
+    lstm_prediction_df = pd.read_csv(
+        lstm_prediction_series_file, index_col=0, parse_dates=True)
+    lstm_prediction_series = pd.Series(
+        lstm_prediction_df['0'].values, index=lstm_prediction_df.index)
+
+    return lstm_prediction_series
+
 
 # 读取测试数据集
 resample_train_test_file_dir = get_resample_train_test_file_dir(
@@ -260,9 +299,16 @@ test_data_series = get_test_series(resample_train_test_file_dir)
 arima_prediction_series = get_airima_predict_series(
     DATA_SET_NAME, TEST_LEN, TRAIN_LEN, RESAMPLE_FREQ_MIN, pdq_prediction_csv)
 
-error = mean_squared_error(
+lstm_prediction_series = get_lstm_predict_series(
+    DATA_SET_NAME, TEST_LEN, TRAIN_LEN, RESAMPLE_FREQ_MIN, lstm_prediction_csv)
+
+arima_mse = mean_squared_error(
     arima_prediction_series.values, test_data_series.values)
-print(error)
+lstm_mse = mean_squared_error(
+    lstm_prediction_series.values, test_data_series.values)
+print('arima error'+str(arima_mse))
+print('lstm error'+str(lstm_mse))
+
 
 static_threshold_pod_num_dic, static_threshold_response_time_dic = static_threshold_method(test_data_series=test_data_series, pod_req_threshold=POD_REQ_THRESHOLD,
                                                                                            pod_cpu_up_threshold=POD_CPU_UP_THRESHOLD, pod_cpu_down_threshold=POD_CPU_DOWN_THRESHOLD,
@@ -281,30 +327,117 @@ arima_predict_pod_num_dic, arima_predict_response_time_dic = predict_with_slow_r
                                                                                       normal_reqsponse_time=NORMAL_RESPONSE_TIME, more_than_threshold_response_time=MORE_THAN_THRESHOLD_RESPONSE_TIME,
                                                                                       resample_interval_minute=RESAMPLE_FREQ_MIN, pod_intial_minute=POD_INITIAL_MINITE,
                                                                                       pod_first_num=POD_FIRST_NUM)
-
+lstm_predict_pod_num_dic, lstm_predict_response_time_dic = predict_with_slow_reduce(test_data_series=test_data_series, prediction_series=lstm_prediction_series, pod_req_threshold=POD_REQ_THRESHOLD,
+                                                                                    pod_cpu_up_threshold=POD_CPU_UP_THRESHOLD, pod_cpu_down_threshold=POD_CPU_DOWN_THRESHOLD,
+                                                                                    normal_reqsponse_time=NORMAL_RESPONSE_TIME, more_than_threshold_response_time=MORE_THAN_THRESHOLD_RESPONSE_TIME,
+                                                                                    resample_interval_minute=RESAMPLE_FREQ_MIN, pod_intial_minute=POD_INITIAL_MINITE,
+                                                                                    pod_first_num=POD_FIRST_NUM)
 print('静态阈值')
 caculate_metric(static_threshold_pod_num_dic,
                 static_threshold_response_time_dic)
 print('预测扩缩_完全正确')
 caculate_metric(correct_predict_pod_num_dic, correct_predict_response_time_dic)
+
 print('预测扩缩_arima')
 caculate_metric(arima_predict_pod_num_dic, arima_predict_response_time_dic)
 
-static_threshold_pod_num_series = pd.Series(static_threshold_pod_num_dic)
-correct_predict_pod_num_series = pd.Series(correct_predict_pod_num_dic)
-arima_predict_pod_num_series = pd.Series(arima_predict_pod_num_dic)
+print('预测扩缩_lstm')
+caculate_metric(lstm_predict_pod_num_dic, lstm_predict_response_time_dic)
+
+sns.set()
+fig = plt.figure(figsize=(12, 5))
+plt.xlabel('Time(sample every 30s)')
+
+# ax1放pod_num
+
+plt.plot(test_data_series, color='gray',
+                label='test_data_series', alpha=0.7, linewidth=1.5)
+plt.plot(arima_prediction_series, color='tab:orange',
+                label='arima_prediction_series', alpha=0.7, linewidth=1.5)
+plt.plot(lstm_prediction_series, color='tab:blue',
+                label='lstm_predict', alpha=0.7, linewidth=1.5)
+
+plt.legend()
+plt.show()
+plt.savefig('prediction', dpi=800,
+            bbox_inches='tight')  # transparent=True#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 绘图resample
+# paint_resample_interval = 10
+paint_resample_interval_string = str(paint_resample_interval)+'min'
+
+static_threshold_pod_num_series = pd.Series(
+    static_threshold_pod_num_dic).resample(paint_resample_interval_string).mean()
+correct_predict_pod_num_series = pd.Series(
+    correct_predict_pod_num_dic).resample(paint_resample_interval_string).mean()
+arima_predict_pod_num_series = pd.Series(arima_predict_pod_num_dic).resample(
+    paint_resample_interval_string).mean()
+lstm_predict_pod_num_series = pd.Series(lstm_predict_pod_num_dic).resample(
+    paint_resample_interval_string).mean()
+test_data_series = test_data_series.resample(
+    paint_resample_interval_string).mean()
+
+
+# print('arima: '+str(arima_predict_pod_num_series.values))
+# print('lstm: '+str(lstm_predict_pod_num_series.values))
+# error=mean_squared_error(arima_predict_pod_num_series.values,lstm_predict_pod_num_series.values)
+# print(error)
 
 
 sns.set()
-fig = plt.figure(figsize=(15, 5))
+fig = plt.figure(figsize=(12, 5))
+ax1 = fig.add_subplot(111)
+plt.xlabel('Time(resample every' +
+           str(int(30*paint_resample_interval/RESAMPLE_FREQ_MIN))+'s)')
 
-plt.plot(np.array(list(range(len(static_threshold_pod_num_series)))),
-         static_threshold_pod_num_series, label='static_threshold')
-plt.plot(np.array(list(range(len(correct_predict_pod_num_series)))),
-         correct_predict_pod_num_series, label='correct_predict')
-plt.plot(np.array(list(range(len(arima_predict_pod_num_series)))),
-         arima_predict_pod_num_series, label='predict')
-# # plt.set_ylabel("pod_num")
-plt.legend()
-plt.savefig('pod_num', dpi=400,
+# ax1放pod_num
+ax1.set_ylabel('Number of Pods')
+lns1 = ax1.plot(static_threshold_pod_num_series, color='gray',
+                label='static_threshold', alpha=0.7, linewidth=1.5)
+lns2 = ax1.plot(lstm_predict_pod_num_series, color='tab:orange',
+                label='lstm_predict', alpha=0.7, linewidth=1.5)
+lns3 = ax1.plot(arima_predict_pod_num_series, color='tab:blue',
+                label='arima_predict', alpha=0.7, linewidth=1.5)
+
+# ax2放请求数量
+ax2 = ax1.twinx()
+ax2.set_ylabel('Request(requests/s)')
+lns4 = ax2.plot(test_data_series, color='green', linestyle='--',
+                label='Request', alpha=0.7, linewidth=1.2)
+# ax2.tick_params(axis='y')
+
+# 设置图例位置，且背景透明
+lns = lns1+lns2+lns3+lns4
+labs = [l.get_label() for l in lns]
+legend = ax1.legend(lns, labs, bbox_to_anchor=(0.5, -0.2),
+                    loc='center', ncol=4, prop={'size': 12}, frameon=False)
+frame = legend.get_frame()
+frame.set_alpha(1)
+frame.set_facecolor('none')  # 设置图例legend背景透明
+fig.tight_layout()
+
+# 设置坐标轴区间
+ax1.set_ylim(0,)
+# ax2.set_ylim(0,)
+
+# 设置去除网格
+ax1.grid(False)
+ax2.grid(False)
+
+# plt.legend()
+plt.show()
+plt.savefig('pod_num', dpi=800,
             bbox_inches='tight')  # transparent=True#

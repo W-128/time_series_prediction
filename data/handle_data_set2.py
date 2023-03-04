@@ -17,11 +17,15 @@ sys.path.append(rootPath)
 
 
 DATA_SET_NAME = 'inttraffic'
-RESAMPLE_FREQ_MIN = 40
-RESAMPLE_FREQ_MIN_STRING = str(RESAMPLE_FREQ_MIN)+'min'
-TEST_LEN = 80
-TRAIN_LEN = 1767
+# RESAMPLE_FREQ_MIN = 40
+# RESAMPLE_FREQ_MIN_STRING = str(RESAMPLE_FREQ_MIN)+'min'
+# TEST_LEN = 80
+# TRAIN_LEN = 1767
 
+RESAMPLE_FREQ_MIN = 5
+RESAMPLE_FREQ_MIN_STRING = str(RESAMPLE_FREQ_MIN)+'min'
+TEST_LEN = 650
+TRAIN_LEN = 2200
 
 def read_dataset_by_name(dataset_name, freq):
     df = pd.read_csv(dataset_name+'.csv', index_col=0, parse_dates=True)
@@ -37,12 +41,12 @@ def read_dataset_by_name(dataset_name, freq):
     return resample_df
 
 
-def draw_data_set(scaled_df, dataset_name,file_name ):
+def draw_data_set(scaled_df, dataset_name,file_name):
 
     sns.set()
     fig = plt.figure(figsize=(15, 5))
 
-    plt.xlabel('Time')
+    plt.xlabel('Time(Sample every 30s)')
     # plt.plot(scaled_df['count'], label='Request(request/s)')
     plt.plot(np.array(list(range(len(scaled_df)))),
              scaled_df['count'].values, label='Request(request/s)')
@@ -53,6 +57,7 @@ def draw_data_set(scaled_df, dataset_name,file_name ):
     ax.spines['left'].set_color('gray')
     ax.spines['top'].set_color('gray')
     ax.spines['bottom'].set_color('gray')
+    plt.xlim(0,)
     # plt.xlim(-10, len(resample_df_low.index) + 10)
     # plt.ylim(0, 80)
     # plt.savefig('nasa_diff_threshold.png', dpi=400, bbox_inches='tight')
@@ -60,7 +65,7 @@ def draw_data_set(scaled_df, dataset_name,file_name ):
     save_path = os.path.join(file_name)
     if not os.path.exists(save_path):
         os.mkdir(save_path)
-    plt.savefig(save_path+'/'+dataset_name+'.png', dpi=400, bbox_inches='tight')
+    plt.savefig(save_path+'/'+dataset_name+'.png', dpi=800, bbox_inches='tight', transparent=True)
 
 # Testing For Stationarity
 
@@ -80,9 +85,7 @@ def stationarity(scaled_df):
 
 def split(scaled_df, test_len):
     test_df = scaled_df[-1*test_len:]
-    train_df = scaled_df[:-1*test_len]
-
-
+    train_df = scaled_df[-1*(TRAIN_LEN+test_len):-1*test_len]
 
     # easy test
 
@@ -100,7 +103,7 @@ def get_test_series(resample_train_test_file):
     test_data_df = pd.read_csv(test_data_file, index_col=0, parse_dates=True)
     test_data_series = pd.Series(
         test_data_df['count'].values, index=test_data_df.index)
-    return test_data_series[1:]
+    return test_data_series
 
 def get_train_series(resample_train_test_file):
     train_data_file = rootPath+'/data/'+resample_train_test_file+'/train_df.csv'
@@ -127,8 +130,13 @@ def main():
         os.mkdir(path)
     train_df.to_csv(path+'/train_df.csv')
     test_df.to_csv(path+'/test_df.csv')
-    
-    draw_data_set(test_df, DATA_SET_NAME+'_test',file_name=DATA_SET_NAME)
+    # 拼接train_df和test_df
+    train_test_df=pd.concat([train_df,test_df]).resample('10min').mean()
+    draw_data_set(train_test_df, '/resample_freq_'+RESAMPLE_FREQ_MIN_STRING +
+                        '_test_len_'+str(TEST_LEN)+'_train_len_'+str(TRAIN_LEN)+'/train_test',file_name=DATA_SET_NAME)
+
+    draw_data_set(test_df, '/resample_freq_'+RESAMPLE_FREQ_MIN_STRING +
+                        '_test_len_'+str(TEST_LEN)+'_train_len_'+str(TRAIN_LEN)+'/test',file_name=DATA_SET_NAME)
 
 if __name__== "__main__" :
     main()

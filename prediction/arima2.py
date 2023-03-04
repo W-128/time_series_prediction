@@ -14,15 +14,18 @@ from torch import xlogy
 from datetime import timedelta
 import math
 from sklearn.metrics import mean_squared_error
-
+# TSA from Statsmodels
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import statsmodels.tsa.api as smt
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(os.path.split(rootPath)[0])
 sys.path.append(rootPath)
 
-from data.handle_data_set import read_dataset_by_name, split, stationarity, get_resample_train_test_file_dir
+from data.handle_data_set2 import read_dataset_by_name, split, stationarity, get_resample_train_test_file_dir
 from my_common.utils import get_logger
-from data.handle_data_set import DATA_SET_NAME, RESAMPLE_FREQ_MIN, TEST_LEN, RESAMPLE_FREQ_MIN_STRING, TRAIN_LEN
+from data.handle_data_set2 import DATA_SET_NAME, RESAMPLE_FREQ_MIN, TEST_LEN, RESAMPLE_FREQ_MIN_STRING, TRAIN_LEN
 
 
 def arima_stable_pdq(train, test, y_len, fre_min, p, d, q):
@@ -36,6 +39,13 @@ def arima_stable_pdq(train, test, y_len, fre_min, p, d, q):
     predictions_series = pd.Series([], dtype='float64')
     resample_train_test_file_dir = get_resample_train_test_file_dir(
         DATA_SET_NAME, TEST_LEN, TRAIN_LEN, RESAMPLE_FREQ_MIN)
+    index=-1*(y_len-1)
+    while index <0:
+        model = ARIMA(history_df[:index], order=(p, d, q)).fit()
+        model.summary()
+        forecast = model.forecast(y_len)
+        predictions_series[forecast.index[1]] = forecast[1]
+        index=index+1
     for t in range(len(test)):
         if (history_df.index[-1]+timedelta(minutes=2*fre_min) <= test.index[-1]):
             model = ARIMA(history_df, order=(p, d, q)).fit()
@@ -50,16 +60,25 @@ def arima_stable_pdq(train, test, y_len, fre_min, p, d, q):
             arima_logger.debug(
                 'test time: '+str(forecast.index[1])+' count: '+str(test.loc[forecast.index[1], 'count']))
     pdq_mse = mean_squared_error(
-        test['count'].values[1:], predictions_series.values)
-    predictions_series.to_csv(
-        'prediction_result/' + resample_train_test_file_dir+'/arima/p_'+str(p)+'_d_'+str(d)+'_q_'+str(q)+'_prediction.csv')
+        test['count'].values, predictions_series.values)
+    
+    csv_save_path = os.path.join('prediction_result/' + resample_train_test_file_dir+'/arima')
+    fig_save_path=os.path.join('prediction_result/'+ resample_train_test_file_dir+'/arima/fig')
+
+    if not os.path.exists(csv_save_path):
+        os.makedirs(csv_save_path)
+
+    if not os.path.exists(fig_save_path):
+        os.makedirs(fig_save_path)
+
+    predictions_series.to_csv(csv_save_path+'/p_'+str(p)+'_d_'+str(d)+'_q_'+str(q)+'_prediction.csv')
     sns.set()
     fig = plt.figure(figsize=(15, 5))
-    plt.plot(test.iloc[1:], label='test')
+    plt.plot(test, label='test')
     plt.plot(predictions_series, label='prediction')
 
     plt.legend()
-    plt.savefig('prediction_result/'+ resample_train_test_file_dir+'/arima/fig/p_'+str(p)+'_d_'+str(d)+'_q_'+str(q)+'_prediction', dpi=400,
+    plt.savefig(fig_save_path+'/p_'+str(p)+'_d_'+str(d)+'_q_'+str(q)+'_prediction', dpi=400,
                 bbox_inches='tight')  # transparent=True#
     return pdq_mse
 
@@ -73,7 +92,7 @@ def do_arima_predict(train_df, test_df, fre_min):
     #         for d in range(max_d+1):
     #             arima_stable_pdq(train_df, test_df, 2, fre_min, p, d, q)
 
-    arima_stable_pdq(train_df, test_df, 2, fre_min, 2, 0, 5)
+    arima_stable_pdq(train_df, test_df, 2, fre_min, 2, 0, 2)
 
 
 def find_best_pdq(test_df):
@@ -100,7 +119,19 @@ def main():
     stationarity(scaled_df)
     # 划分测试集和训练集，并保存
     train_df, test_df = split(scaled_df, test_len=TEST_LEN)
-    do_arima_predict(train_df, test_df, RESAMPLE_FREQ_MIN)
+    fig = plt.figure(figsize=(12,8))
+    #acf
+    ax1 = fig.add_subplot(211)
+    fig = sm.graphics.tsa.plot_acf(train_df.diff(1).dropna(), lags=40,ax=ax1)
+    ax1.xaxis.set_ticks_position('bottom')
+    fig.tight_layout();
+    #pacf
+    ax2 = fig.add_subplot(212)
+    fig = sm.graphics.tsa.plot_pacf(train_df.diff(1).dropna(),lags=40, ax=ax2)
+    ax2.xaxis.set_ticks_position('bottom')
+    fig.tight_layout();
+    fig.savefig('acf_pacf.png')
+    # do_arima_predict(train_df, test_df, RESAMPLE_FREQ_MIN)
     # find_best_pdq(test_df)
 
 
